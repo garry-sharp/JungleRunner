@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Jungle Swinger</title>
+        <style>
+            canvas {
+                border: 1px solid black;
+            }
+        </style>
+    </head>
+    <body>
+        <canvas id="myCanvas" width="800" height="600"></canvas>
+        <script src="https://cdn.jsdelivr.net/npm/lodash@4.17.21/lodash.min.js"></script>
+        <script>
+            var canvas = document.getElementById("myCanvas");
+            var ctx = canvas.getContext("2d");
+
+            const FRAMES = 60;
+            const CHARACTER_FRAMES_TO_MOVE = 5;
+            const CHARACTER_LOW_JUMP_FRAMES = FRAMES * 1;
+            const CHARACTER_LOW_JUMP_HEIGHT = 160;
+            const CHARACTER_HIGH_JUMP_FRAMES = FRAMES * 1.5;
+            const CHARACTER_HIGH_JUMP_HEIGHT = 275;
+            const CHARACTER_HEIGHT = 100;
+            const CHARACTER_WIDTH = 100;
+            const CHARACTER_FLOOR = 400;
+            const CHARACTER_X_OFFSET = 100;
+            const WALL_Y_DISPLCEMENT = 515;
+
+            const data = {
+                startTime: null,
+                frame: 0,
+                tiles: {
+                    image: null,
+                },
+                background: {
+                    axis: {
+                        plx2: 0,
+                        plx3: 0,
+                        plx4: 0,
+                        plx5: 0,
+                        floor: 0,
+                    },
+                    images: {},
+                },
+                character: {
+                    dead: 0,
+                    images: [],
+                    jumpingImages: [],
+                    frame: 0,
+                    ticksToNextFrame: CHARACTER_FRAMES_TO_MOVE,
+                    jumping: 0,
+                    jumpingFrame: 1,
+                    jumpingTicksToNextFrame: 8,
+                    jumpingType: null,
+                },
+                walls: {
+                    images: {
+                        hugeWall: {
+                            dispX: 64,
+                            dispY: 33,
+                            lenX: 80,
+                            lenY: 67,
+                            width: 400,
+                            height: 350,
+                        },
+                        bigWall: {
+                            dispX: 64,
+                            dispY: 128,
+                            lenX: 48,
+                            lenY: 36,
+                            width: 400,
+                            height: 150,
+                        },
+                        medWall: {
+                            dispX: 160,
+                            dispY: 33,
+                            lenX: 33,
+                            lenY: 13,
+                            width: 200,
+                            height: 100,
+                        },
+                    },
+                    data: [],
+                },
+            };
+
+            async function run() {
+                await Promise.all([loadBackground(), loadRunner(), loadTileset()]);
+                data.startTime = Date.now();
+                const loop = setInterval(function () {
+                    loopLocal = loop;
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
+                    if (data.character.dead <= 0) {
+                        //console.log("loop1");
+                        drawBackgroundNext();
+                        drawRunnerNext();
+                        if (data.walls.data.length <= 3) {
+                            addWall();
+                        }
+                        drawWallsNext();
+                    } else {
+                        //console.log("loop2");
+                        drawBackground();
+                        drawRunnerDeath();
+                        drawWalls();
+                        data.character.dead--;
+                        if (data.character.dead == 0) {
+                            data.walls.data = [];
+                        }
+                    }
+                    if (hasCollided() && data.character.dead === 0) {
+                        console.log("collided");
+                        data.character.dead = 120;
+                    }
+                    drawTimer();
+                }, 1000 / FRAMES);
+
+                window.addEventListener(
+                    "keydown",
+                    function (e) {
+                        let downTime = new Date();
+                        if ((e.keyCode === 38 || e.keyCode === 32) && data.character.jumping === 0) {
+                            function keyUpHandler(e) {
+                                if (e.keyCode === 38 || e.keyCode === 32) {
+                                    let upTime = new Date();
+                                    let timeDiff = upTime - downTime;
+                                    if (timeDiff < 65) {
+                                        data.character.jumping = CHARACTER_LOW_JUMP_FRAMES;
+                                        data.character.jumpingType = "low";
+                                    } else {
+                                        data.character.jumping = CHARACTER_HIGH_JUMP_FRAMES;
+                                        data.character.jumpingType = "high";
+                                    }
+                                }
+                                window.removeEventListener("keyup", keyUpHandler);
+                            }
+                            window.addEventListener("keyup", keyUpHandler);
+                        }
+                    },
+                    false
+                );
+            }
+
+            async function loadTileset() {
+                return new Promise((resolve) => {
+                    const tileset = new Image();
+                    tileset.onload = function () {
+                        data.tiles.image = tileset;
+                        resolve(tileset);
+                    };
+                    tileset.src = "/assets/tileset.png";
+                });
+            }
+
+            function Y(fi, type = "low") {
+                min_height = CHARACTER_FLOOR;
+                for (wall of data.walls.data) {
+                    if (
+                        wall.X < CHARACTER_X_OFFSET + CHARACTER_WIDTH &&
+                        wall.X + data.walls.images[wall.type].width > CHARACTER_X_OFFSET
+                    ) {
+                        min_height = WALL_Y_DISPLCEMENT - data.walls.images[wall.type].height - CHARACTER_HEIGHT;
+                    }
+                }
+
+                if (fi <= 0) return CHARACTER_FLOOR;
+                if (data.character.jumping <= 0) return CHARACTER_FLOOR;
+                let jumpHeight = 0;
+                let jumpFrames = 0;
+                if (type == "low") {
+                    jumpHeight = CHARACTER_LOW_JUMP_HEIGHT;
+                    jumpFrames = CHARACTER_LOW_JUMP_FRAMES;
+                } else if (type == "high") {
+                    jumpHeight = CHARACTER_HIGH_JUMP_HEIGHT;
+                    jumpFrames = CHARACTER_HIGH_JUMP_FRAMES;
+                }
+
+                const totalTime = jumpFrames / (60 * 2);
+                const frameLength = (totalTime / jumpFrames) * 2; // Length of each frame
+                const g = (-2 * jumpHeight) / Math.pow(totalTime, 2); // Acceleration due to gravity (assuming symmetric jump)
+                const v0 = Math.sqrt(-2 * g * jumpHeight); // Initial velocity
+                let time = fi * frameLength;
+                displacement = v0 * time + 0.5 * g * Math.pow(time, 2);
+
+                //console.log(_.min([min_height, CHARACTER_FLOOR - displacement]));
+
+                return _.min([min_height, CHARACTER_FLOOR - displacement]);
+            }
+
+            async function loadBackground() {
+                return new Promise((resolve) => {
+                    const plx1 = new Image();
+                    const plx2 = new Image();
+                    const plx3 = new Image();
+                    const plx4 = new Image();
+                    const plx5 = new Image();
+
+                    let loadCount = 5;
+
+                    function imageLoads() {
+                        loadCount--;
+                        if (loadCount == 0) {
+                            data.background.images.plx1 = plx1;
+                            data.background.images.plx2 = plx2;
+                            data.background.images.plx3 = plx3;
+                            data.background.images.plx4 = plx4;
+                            data.background.images.plx5 = plx5;
+                            resolve(true);
+                        }
+                    }
+
+                    plx1.onload = imageLoads;
+                    plx2.onload = imageLoads;
+                    plx3.onload = imageLoads;
+                    plx4.onload = imageLoads;
+                    plx5.onload = imageLoads;
+
+                    plx1.src = "/assets/background/plx-1.png";
+                    plx2.src = "/assets/background/plx-2.png";
+                    plx3.src = "/assets/background/plx-3.png";
+                    plx4.src = "/assets/background/plx-4.png";
+                    plx5.src = "/assets/background/plx-5.png";
+                });
+            }
+
+            function drawBackground() {
+                ctx.drawImage(data.background.images.plx1, 0, 0, canvas.width, canvas.height);
+
+                ctx.drawImage(data.background.images.plx2, data.background.axis.plx2, 0, canvas.width, canvas.height);
+                ctx.drawImage(
+                    data.background.images.plx2,
+                    data.background.axis.plx2 + canvas.width,
+                    0,
+                    canvas.width,
+                    canvas.height
+                );
+
+                ctx.drawImage(data.background.images.plx3, data.background.axis.plx3, 0, canvas.width, canvas.height);
+                ctx.drawImage(
+                    data.background.images.plx3,
+                    data.background.axis.plx3 + canvas.width,
+                    0,
+                    canvas.width,
+                    canvas.height
+                );
+
+                ctx.drawImage(data.background.images.plx4, data.background.axis.plx4, 0, canvas.width, canvas.height);
+                ctx.drawImage(
+                    data.background.images.plx4,
+                    data.background.axis.plx4 + canvas.width,
+                    0,
+                    canvas.width,
+                    canvas.height
+                );
+
+                ctx.drawImage(data.background.images.plx5, data.background.axis.plx5, 0, canvas.width, canvas.height);
+                ctx.drawImage(
+                    data.background.images.plx5,
+                    data.background.axis.plx5 + canvas.width,
+                    0,
+                    canvas.width,
+                    canvas.height
+                );
+
+                ctx.drawImage(data.tiles.image, 16, 220, 160, 45, data.background.axis.floor, 450, 800, 300);
+                ctx.drawImage(
+                    data.tiles.image,
+                    16,
+                    220,
+                    160,
+                    45,
+                    data.background.axis.floor + canvas.width,
+                    450,
+                    800,
+                    300
+                );
+            }
+
+            function drawBackgroundNext() {
+                data.background.axis.plx2 -= 1;
+                data.background.axis.plx3 -= 2;
+                data.background.axis.plx4 -= 3;
+                data.background.axis.plx5 -= 4;
+                data.background.axis.floor -= 5;
+
+                if (data.background.axis.plx2 <= -canvas.width) data.background.axis.plx2 += canvas.width;
+                if (data.background.axis.plx3 <= -canvas.width) data.background.axis.plx3 += canvas.width;
+                if (data.background.axis.plx4 <= -canvas.width) data.background.axis.plx4 += canvas.width;
+                if (data.background.axis.plx5 <= -canvas.width) data.background.axis.plx5 += canvas.width;
+                if (data.background.axis.floor <= -canvas.width) data.background.axis.floor += canvas.width;
+
+                drawBackground();
+            }
+
+            async function loadRunner() {
+                return new Promise((resolve) => {
+                    let loadcount = 12;
+                    const f0 = new Image();
+                    const f1 = new Image();
+                    const f2 = new Image();
+                    const f3 = new Image();
+                    const f4 = new Image();
+                    const f5 = new Image();
+                    const f6 = new Image();
+                    const f7 = new Image();
+
+                    const j0 = new Image();
+                    const j1 = new Image();
+                    const j2 = new Image();
+                    const j3 = new Image();
+
+                    function onload() {
+                        loadcount--;
+                        if (loadcount == 0) {
+                            data.character.images = [f0, f1, f2, f3, f4, f5, f6, f7];
+                            data.character.jumpingImages = [j0, j1, j2, j3];
+                            resolve(true);
+                        }
+                    }
+
+                    f0.onload = onload;
+                    f1.onload = onload;
+                    f2.onload = onload;
+                    f3.onload = onload;
+                    f4.onload = onload;
+                    f5.onload = onload;
+                    f6.onload = onload;
+                    f7.onload = onload;
+
+                    j0.onload = onload;
+                    j1.onload = onload;
+                    j2.onload = onload;
+                    j3.onload = onload;
+
+                    f0.src = "/assets/character/running/frame0.gif";
+                    f1.src = "/assets/character/running/frame1.gif";
+                    f2.src = "/assets/character/running/frame2.gif";
+                    f3.src = "/assets/character/running/frame3.gif";
+                    f4.src = "/assets/character/running/frame4.gif";
+                    f5.src = "/assets/character/running/frame5.gif";
+                    f6.src = "/assets/character/running/frame6.gif";
+                    f7.src = "/assets/character/running/frame7.gif";
+
+                    j0.src = "/assets/character/jumping/jump.png";
+                    j1.src = "/assets/character/jumping/mid0.gif";
+                    j2.src = "/assets/character/jumping/mid1.gif";
+                    j3.src = "/assets/character/jumping/land.png";
+                });
+            }
+
+            function getRunnerFrame() {
+                let jumpHeight = 0;
+                let jumpFrames = 0;
+                if (data.character.jumpingType == "low") {
+                    jumpHeight = CHARACTER_LOW_JUMP_HEIGHT;
+                    jumpFrames = CHARACTER_LOW_JUMP_FRAMES;
+                } else if (data.character.jumpingType == "high") {
+                    jumpHeight = CHARACTER_HIGH_JUMP_HEIGHT;
+                    jumpFrames = CHARACTER_HIGH_JUMP_FRAMES;
+                }
+
+                if (data.character.jumping > 0) {
+                    if (data.character.jumping + 15 >= jumpFrames) {
+                        return data.character.jumpingImages[0];
+                    } else if (data.character.jumping <= 15) {
+                        return data.character.jumpingImages[3];
+                    } else {
+                        return data.character.jumpingImages[data.character.jumpingFrame];
+                    }
+                } else {
+                    return data.character.images[data.character.frame];
+                }
+            }
+
+            function drawRunner() {
+                if (data.character.jumping > 0) {
+                    let jumpFrames = 0;
+                    if (data.character.jumping) {
+                        if (data.character.jumpingType == "low") {
+                            jumpFrames = CHARACTER_LOW_JUMP_FRAMES;
+                        } else if (data.character.jumpingType == "high") {
+                            jumpFrames = CHARACTER_HIGH_JUMP_FRAMES;
+                        }
+                    }
+
+                    ctx.drawImage(
+                        getRunnerFrame(),
+                        CHARACTER_X_OFFSET,
+                        Y(jumpFrames - data.character.jumping, data.character.jumpingType),
+                        CHARACTER_WIDTH,
+                        CHARACTER_HEIGHT
+                    );
+                } else {
+                    ctx.drawImage(
+                        data.character.images[data.character.frame],
+                        CHARACTER_X_OFFSET,
+                        Y(data.character.jumping),
+                        CHARACTER_WIDTH,
+                        CHARACTER_HEIGHT
+                    );
+                }
+            }
+
+            function drawRunnerDeath() {
+                let totalDistance = Y(data.character.jumping, data.character.jumpingType);
+                if (data.character.dead > 60) {
+                    ctx.drawImage(
+                        getRunnerFrame(),
+                        CHARACTER_X_OFFSET,
+                        (totalDistance / 40) * (data.character.dead - 80),
+                        CHARACTER_WIDTH,
+                        CHARACTER_HEIGHT
+                    );
+                } else {
+                    ctx.drawImage(
+                        getRunnerFrame(),
+                        CHARACTER_X_OFFSET,
+                        1200 / data.character.dead,
+                        CHARACTER_WIDTH,
+                        CHARACTER_HEIGHT
+                    );
+                }
+            }
+
+            function drawRunnerNext() {
+                if (data.character.jumping > 0) {
+                    data.character.frame = 0;
+                    data.character.ticksToNextFrame = CHARACTER_FRAMES_TO_MOVE;
+                    data.character.jumping--;
+                    if (
+                        data.character.jumpingFrame + 15 < CHARACTER_LOW_JUMP_FRAMES ||
+                        data.character.jumpingFrame > 15
+                    ) {
+                        data.character.jumpingTicksToNextFrame--;
+                        if (data.character.jumpingTicksToNextFrame == 0) {
+                            data.character.jumpingTicksToNextFrame = 8;
+                            if (data.character.jumpingFrame == 1) {
+                                data.character.jumpingFrame = 2;
+                            } else {
+                                data.character.jumpingFrame = 1;
+                            }
+                        }
+                    } else {
+                        data.character.jumpingFrame = 1;
+                        data.character.jumpingTicksToNextFrame = 4;
+                    }
+                } else {
+                    data.character.ticksToNextFrame--;
+                    if (data.character.ticksToNextFrame == 0) {
+                        data.character.ticksToNextFrame = CHARACTER_FRAMES_TO_MOVE;
+                        data.character.frame++;
+                        if (data.character.frame == 8) {
+                            data.character.frame = 0;
+                        }
+                    }
+                }
+                drawRunner();
+            }
+
+            function drawTimer() {
+                const elapsed = Date.now() - data.startTime;
+                ctx.fillStyle = "black";
+                ctx.font = "36px Arial";
+                ctx.fillText(
+                    `${Math.floor(elapsed / 1000 / 60)
+                        .toString()
+                        .padStart(2, "0")} : ${Math.floor(elapsed / 1000 - elapsed / 1000 / 60)
+                        .toString()
+                        .padStart(2, "0")}`,
+                    300,
+                    60
+                );
+            }
+
+            function addWall() {
+                lastWallX =
+                    (_.last(data.walls.data) || { X: 600 }).X +
+                    data.walls.images[_.get(_.last(data.walls.data), "type", "bigWall")].width;
+                //console.log(lastWallX);
+                //console.log(_.get(_.last(data.walls.data), "type", "bigWall"));
+                data.walls.data.push({
+                    X: lastWallX + _.random(200, 800),
+                    type: ["bigWall", "medWall"][_.random(0, 1)],
+                });
+
+                //console.log(data.walls.data);
+            }
+
+            function drawWallsNext() {
+                newWalls = _.map(data.walls.data, (wall) => {
+                    return {
+                        ...wall,
+                        X: wall.X - 5,
+                    };
+                });
+                //console.log(newWalls);
+                newWalls = _.filter(newWalls, (wall) => wall.X > -data.walls.images[wall.type].width);
+                data.walls.data = newWalls;
+                drawWalls();
+            }
+
+            function drawWalls() {
+                for (wall of data.walls.data) {
+                    ctx.drawImage(
+                        data.tiles.image,
+                        data.walls.images[wall.type].dispX,
+                        data.walls.images[wall.type].dispY,
+                        data.walls.images[wall.type].lenX,
+                        data.walls.images[wall.type].lenY,
+                        wall.X,
+                        WALL_Y_DISPLCEMENT - data.walls.images[wall.type].height,
+                        data.walls.images[wall.type].width,
+                        data.walls.images[wall.type].height
+                    );
+                }
+            }
+
+            function hasCollided() {
+                for (wall of data.walls.data) {
+                    if (
+                        CHARACTER_X_OFFSET + CHARACTER_WIDTH > wall.X &&
+                        CHARACTER_X_OFFSET < wall.X + 10 &&
+                        //CHARACTER_X_OFFSET < wall.X + data.walls.images[wall.type].width &&
+                        Y(data.character.jumping, data.character.jumpingType) + CHARACTER_HEIGHT >
+                            WALL_Y_DISPLCEMENT - data.walls.images[wall.type].height
+                    ) {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                }
+                return false;
+            }
+
+            function isLanding() {}
+            run();
+        </script>
+    </body>
+</html>
